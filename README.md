@@ -48,8 +48,18 @@ TWO_MINUTES_FROM_NOW=$(date -d '+2 minutes' +%s000000000)
 # on MacOS
 TWO_MINUTES_FROM_NOW=$(date -v+2M +%s000000000)
 
-near contract call-function as-transaction '<CONTRACT_ACCOUNT_ID>' init json-args '{"end_time": "'$TWO_MINUTES_FROM_NOW'", "auctioneer": "<AUCTIONEER_ACCOUNT_ID>"}' prepaid-gas '30.0 Tgas' attached-deposit '0 NEAR'
+near contract call-function as-transaction '<CONTRACT_ACCOUNT_ID>' init json-args '{"end_time": "'$TWO_MINUTES_FROM_NOW'", "auctioneer": "<AUCTIONEER_ACCOUNT_ID>", "token_contract": "usdn.testnet", "bid_step": "1000000000000000000"}' prepaid-gas '30.0 Tgas' attached-deposit '0 NEAR'
 ```
+
+`token_contract` is the NEP-141 token contract allowed to submit bids. `bid_step` is the minimum increment in the token's smallest units. The current `usdn.testnet` metadata reports 18 decimals, so the example sets the minimum increment to 1 USN.
+
+The contract account and every bidder/auctioneer must be registered with the USN contract before they can receive USN. Send a bid using `ft_transfer_call` on `usdn.testnet` (not a NEAR deposit):
+
+```bash
+near contract call-function as-transaction usdn.testnet ft_transfer_call json-args '{"receiver_id": "<CONTRACT_ACCOUNT_ID>", "amount": "<AMOUNT_IN_SMALLEST_USN_UNITS>", "msg": ""}' prepaid-gas '100.0 Tgas' attached-deposit '1 yoctoNEAR'
+```
+
+The contract refunds the previous bidder and transfers the winning USN to the auctioneer when `claim` is called after the auction ends.
 
 ## Useful Links
 

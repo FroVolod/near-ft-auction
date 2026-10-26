@@ -1,112 +1,80 @@
-// Find NEAR documentation at https://docs.near.org
-use near_sdk::json_types::U64;
-use near_sdk::{AccountId, NearToken, PanicOnDefault, Promise, Timestamp, env, near, require};
+use near_contract_standards::fungible_token::receiver::FungibleTokenReceiver;
+use near_sdk::json_types::{U64, U128};
+use near_sdk::{
+    AccountId, Gas, NearToken, PanicOnDefault, Promise, PromiseOrValue, Timestamp, env, near,
+    require,
+};
 
-// Define the contract structure
 #[near(contract_state)]
-#[derive(PanicOnDefault)] // The contract is required to be initialized with `#[init]` functions
+#[derive(PanicOnDefault)]
 pub struct Contract {
-    highest_bid: Bid,
+    highest_bid: StoredBid,
+    token_contract: AccountId,
+    bid_step: u128,
     auction_end_time: Timestamp,
     auctioneer: AccountId,
     is_claimed: bool,
 }
 
-// The Bid structure is used as function return value (JSON-serialized) and as part of the Contract
-// state (Borsh-serialized)
-#[near(serializers = [json, borsh])]
+#[near(serializers = [borsh])]
+#[derive(Clone)]
+struct StoredBid {
+    bidder: AccountId,
+    bid: u128,
+}
+
+#[near(serializers = [json])]
 #[derive(Clone)]
 pub struct Bid {
     pub bidder: AccountId,
-    pub bid: NearToken,
+    pub bid: U128,
 }
 
-// Implement the contract functions
 #[near]
 impl Contract {
-    /// Initializer function that one must call after the contract code is deployed to an account
-    /// for the first time, all other functions will fail to execute until the contract state is
-    /// initialized (thanks to PanicOnDefault derive above).
-    /// It is common to batch contract initialization in the same transaction as contract deployment.
-    /// Sometimes #[private] attribute can also be useful to guard the function to be callable only
-    /// by the account where the contract is deployed to.
     #[init]
-    pub fn init(end_time: U64, auctioneer: AccountId) -> Self {
+    pub fn init(
+        end_time: U64,
+        auctioneer: AccountId,
+        token_contract: AccountId,
+        bid_step: U128,
+    ) -> Self {
+        require!(bid_step.0 > 0, "Bid step must be greater than zero");
+
         Self {
-            highest_bid: Bid {
+            highest_bid: StoredBid {
                 bidder: env::current_account_id(),
-                bid: NearToken::from_yoctonear(1),
+                bid: 0,
             },
+            token_contract,
+            bid_step: bid_step.0,
             auction_end_time: end_time.into(),
             is_claimed: false,
             auctioneer,
         }
     }
 
-    /// Bid function can be called by any account on blockchain to make a higher bid on the auction
-    #[payable]
-    pub fn bid(&mut self) -> Promise {
-        // Assert the auction is still ongoing
-        require!(
-            env::block_timestamp() < self.auction_end_time,
-            "Auction has ended"
-        );
-
-        // Current bid
-        let bid = env::attached_deposit();
-        let bidder = env::predecessor_account_id();
-
-        // Last bid recorded by the contract
-        let Bid {
-            bidder: last_bidder,
-            bid: last_bid,
-        } = self.highest_bid.clone();
-
-        // Check if the deposit is higher than the current bid
-        require!(bid > last_bid, "You must place a higher bid");
-
-        // Update the highest bid
-        self.highest_bid = Bid { bidder, bid };
-
-        // Transfer tokens back to the last bidder.
-        //
-        // NOTE: The result of this Promise is not handled. If this transfer fails (for example,
-        // because `last_bidder` account was removed), the previous bidder may not be refunded even
-        // though `self.highest_bid` has already been updated. For production use, consider
-        // implementing a withdrawal pattern or adding a callback to handle transfer failures.
-        Promise::new(last_bidder).transfer(last_bid)
-    }
-
-    /// Claim function can be called by any account on blockchain to claim the auction and transfer
-    /// the tokens to the auctioneer
     pub fn claim(&mut self) -> Promise {
-        // Assert the auction has ended
         require!(
             env::block_timestamp() > self.auction_end_time,
             "Auction has not ended yet"
         );
-
-        // Assert the auction has not been claimed yet
         require!(!self.is_claimed, "Auction has already been claimed");
         self.is_claimed = true;
 
-        // Transfer tokens to the auctioneer.
-        //
-        // NOTE: The result of this Promise is not handled. If this transfer fails (for example,
-        // because `last_bidder` account was removed), the previous bidder may not be refunded even
-        // though `self.highest_bid` has already been updated. For production use, consider
-        // implementing a withdrawal pattern or adding a callback to handle transfer failures.
-        Promise::new(self.auctioneer.clone()).transfer(self.highest_bid.bid)
+        // This example does not restore the claim if the asynchronous token transfer fails.
+        transfer_tokens(
+            self.token_contract.clone(),
+            self.auctioneer.clone(),
+            U128(self.highest_bid.bid),
+        )
     }
 
-    /*
-     * The functions below are read-only functions that can be called without a transaction (through
-     * JSON RPC query call). They read the data from the contract local storage and return the
-     * highest bid, auction end time, auctioneer, and claimed status
-     */
-
     pub fn get_highest_bid(&self) -> Bid {
-        self.highest_bid.clone()
+        Bid {
+            bidder: self.highest_bid.bidder.clone(),
+            bid: U128(self.highest_bid.bid),
+        }
     }
 
     pub fn get_auction_end_time(&self) -> U64 {
@@ -117,21 +85,97 @@ impl Contract {
         self.auctioneer.clone()
     }
 
+    pub fn get_token_contract(&self) -> AccountId {
+        self.token_contract.clone()
+    }
+
+    pub fn get_bid_step(&self) -> U128 {
+        U128(self.bid_step)
+    }
+
     pub fn is_already_claimed(&self) -> bool {
         self.is_claimed
     }
 }
 
-/*
- * The rest of this file holds the inline tests for the code above
- * Learn more about Rust tests: https://doc.rust-lang.org/book/ch11-01-writing-tests.html
- */
+#[near]
+impl FungibleTokenReceiver for Contract {
+    fn ft_on_transfer(
+        &mut self,
+        sender_id: AccountId,
+        amount: U128,
+        _msg: String,
+    ) -> PromiseOrValue<U128> {
+        require!(
+            env::predecessor_account_id() == self.token_contract,
+            "Only the configured token contract can submit bids"
+        );
+        require!(
+            env::block_timestamp() < self.auction_end_time,
+            "Auction has ended"
+        );
+
+        let StoredBid {
+            bidder: last_bidder,
+            bid: last_bid,
+        } = self.highest_bid.clone();
+        let is_current_bidder = sender_id == last_bidder;
+        let minimum_payment = if is_current_bidder {
+            self.bid_step
+        } else {
+            last_bid
+                .checked_add(self.bid_step)
+                .expect("Minimum bid exceeds the maximum token amount")
+        };
+        require!(
+            amount.0 >= minimum_payment,
+            "Bid is below the minimum increment"
+        );
+
+        let new_bid = if is_current_bidder {
+            last_bid
+                .checked_add(amount.0)
+                .expect("Bid exceeds the maximum token amount")
+        } else {
+            amount.0
+        };
+        self.highest_bid = StoredBid {
+            bidder: sender_id,
+            bid: new_bid,
+        };
+
+        if !is_current_bidder && last_bid > 0 {
+            // This example does not recover the refund if the asynchronous token transfer fails.
+            let _ = transfer_tokens(self.token_contract.clone(), last_bidder, U128(last_bid));
+        }
+
+        PromiseOrValue::Value(U128(0))
+    }
+}
+
+fn transfer_tokens(token_contract: AccountId, receiver_id: AccountId, amount: U128) -> Promise {
+    let args = near_sdk::serde_json::json!({
+        "receiver_id": receiver_id,
+        "amount": amount,
+        "memo": Option::<String>::None,
+    });
+    Promise::new(token_contract).function_call(
+        "ft_transfer".to_string(),
+        near_sdk::serde_json::to_vec(&args).expect("Failed to serialize token transfer arguments"),
+        NearToken::from_yoctonear(1),
+        Gas::from_tgas(10),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use near_sdk::json_types::U64;
     use near_sdk::test_utils::{VMContextBuilder, accounts};
-    use near_sdk::{AccountId, testing_env};
+    use near_sdk::testing_env;
+
+    fn token_contract() -> AccountId {
+        "usdn.testnet".parse().unwrap()
+    }
 
     fn get_context(predecessor_account_id: AccountId) -> VMContextBuilder {
         let mut builder = VMContextBuilder::new();
@@ -142,135 +186,115 @@ mod tests {
         builder
     }
 
-    #[test]
-    fn init_contract() {
-        let end_time: U64 = U64::from(1000);
-        let alice: AccountId = "alice.near".parse().unwrap();
-        let contract = Contract::init(end_time, alice.clone());
+    fn new_contract() -> Contract {
+        testing_env!(get_context(accounts(1)).build());
+        Contract::init(U64::from(1000), accounts(2), token_contract(), U128(10))
+    }
 
-        let default_bid = contract.get_highest_bid();
-        assert_eq!(default_bid.bidder, env::current_account_id());
-        assert_eq!(default_bid.bid, NearToken::from_yoctonear(1));
-
-        let auction_end_time = contract.get_auction_end_time();
-        assert_eq!(auction_end_time, end_time);
-
-        let auctioneer = contract.get_auctioneer();
-        assert_eq!(auctioneer, alice);
-
-        assert!(!contract.is_already_claimed());
+    fn receive_bid(contract: &mut Contract, bidder: AccountId, amount: u128) {
+        let mut context = get_context(token_contract());
+        context.block_timestamp(500);
+        testing_env!(context.build());
+        let _ = contract.ft_on_transfer(bidder, U128(amount), String::new());
     }
 
     #[test]
-    fn bid_successfully() {
-        let auctioneer: AccountId = "auctioneer.near".parse().unwrap();
-        let alice: AccountId = "alice.near".parse().unwrap();
-        let end_time: U64 = U64::from(1000);
-        let mut contract = Contract::init(end_time, auctioneer.clone());
+    fn initializes_with_zero_bid_and_configured_token() {
+        let contract = new_contract();
 
-        // Set block_timestamp before auction end time
-        let mut context = get_context(alice.clone());
-        context.block_timestamp(500);
-        context.attached_deposit(NearToken::from_near(2));
-        testing_env!(context.build());
+        let highest_bid = contract.get_highest_bid();
+        assert_eq!(highest_bid.bidder, env::current_account_id());
+        assert_eq!(highest_bid.bid, U128(0));
+        assert_eq!(contract.get_token_contract(), token_contract());
+        assert_eq!(contract.get_bid_step(), U128(10));
+    }
 
-        // Bid should succeed
-        let _ = contract.bid();
+    #[test]
+    fn accepts_first_bid_and_same_bidder_increment() {
+        let mut contract = new_contract();
+        let alice = accounts(3);
 
-        // Verify highest bid is updated
+        receive_bid(&mut contract, alice.clone(), 20);
+        assert_eq!(contract.get_highest_bid().bid, U128(20));
+
+        receive_bid(&mut contract, alice.clone(), 10);
         let highest_bid = contract.get_highest_bid();
         assert_eq!(highest_bid.bidder, alice);
-        assert_eq!(highest_bid.bid, NearToken::from_near(2));
+        assert_eq!(highest_bid.bid, U128(30));
+    }
+
+    #[test]
+    fn accepts_higher_bid_from_new_bidder() {
+        let mut contract = new_contract();
+        let alice = accounts(3);
+        let bob = accounts(4);
+
+        receive_bid(&mut contract, alice, 20);
+        receive_bid(&mut contract, bob.clone(), 30);
+
+        let highest_bid = contract.get_highest_bid();
+        assert_eq!(highest_bid.bidder, bob);
+        assert_eq!(highest_bid.bid, U128(30));
+    }
+
+    #[test]
+    #[should_panic(expected = "Only the configured token contract can submit bids")]
+    fn rejects_bids_from_other_tokens() {
+        let mut contract = new_contract();
+        testing_env!(get_context(accounts(5)).block_timestamp(500).build());
+        let _ = contract.ft_on_transfer(accounts(3), U128(20), String::new());
+    }
+
+    #[test]
+    #[should_panic(expected = "Bid is below the minimum increment")]
+    fn rejects_bid_below_minimum_increment() {
+        let mut contract = new_contract();
+        receive_bid(&mut contract, accounts(3), 20);
+        receive_bid(&mut contract, accounts(4), 29);
     }
 
     #[test]
     #[should_panic(expected = "Auction has ended")]
-    fn bid_after_auction_ended() {
-        let auctioneer: AccountId = "auctioneer.near".parse().unwrap();
-        let alice: AccountId = "alice.near".parse().unwrap();
-        let end_time: U64 = U64::from(1000);
-        let mut contract = Contract::init(end_time, auctioneer.clone());
-
-        // Set block_timestamp after auction end time
-        let mut context = get_context(alice.clone());
-        context.block_timestamp(2000);
-        context.attached_deposit(NearToken::from_near(2));
+    fn rejects_bids_after_auction_end() {
+        let mut contract = new_contract();
+        let mut context = get_context(token_contract());
+        context.block_timestamp(1000);
         testing_env!(context.build());
-
-        // Bid should panic
-        let _ = contract.bid();
+        let _ = contract.ft_on_transfer(accounts(3), U128(20), String::new());
     }
 
     #[test]
-    #[should_panic(expected = "You must place a higher bid")]
-    fn bid_lower_than_current() {
-        let auctioneer: AccountId = "auctioneer.near".parse().unwrap();
-        let alice: AccountId = "alice.near".parse().unwrap();
-        let end_time: U64 = U64::from(1000);
-        let mut contract = Contract::init(end_time, auctioneer.clone());
+    fn claim_transfers_winning_amount_to_auctioneer() {
+        let mut contract = new_contract();
+        let alice = accounts(3);
+        receive_bid(&mut contract, alice, 20);
 
-        // Set block_timestamp before auction end time
-        let mut context = get_context(alice.clone());
-        context.block_timestamp(500);
-        // Default bid is 1 yoctoNEAR, so bidding with 0 or less should fail
-        // But we'll bid with the same amount (1 yoctoNEAR) which should also fail
-        context.attached_deposit(NearToken::from_yoctonear(1));
+        let mut context = get_context(accounts(2));
+        context.block_timestamp(1001);
         testing_env!(context.build());
-
-        // Bid should panic
-        let _ = contract.bid();
-    }
-
-    #[test]
-    fn claim_after_auction_ended() {
-        let auctioneer: AccountId = "auctioneer.near".parse().unwrap();
-        let end_time: U64 = U64::from(1000);
-        let mut contract = Contract::init(end_time, auctioneer.clone());
-
-        // Set block_timestamp after auction end time
-        let mut context = get_context(auctioneer.clone());
-        context.block_timestamp(2000);
-        testing_env!(context.build());
-
-        // Claim should succeed
         let _ = contract.claim();
 
-        // Verify auction is marked as claimed
         assert!(contract.is_already_claimed());
     }
 
     #[test]
     #[should_panic(expected = "Auction has not ended yet")]
-    fn claim_before_auction_ended() {
-        let auctioneer: AccountId = "auctioneer.near".parse().unwrap();
-        let end_time: U64 = U64::from(1000);
-        let mut contract = Contract::init(end_time, auctioneer.clone());
-
-        // Set block_timestamp before auction end time
-        let mut context = get_context(auctioneer.clone());
-        context.block_timestamp(500);
+    fn rejects_claim_before_auction_end() {
+        let mut contract = new_contract();
+        let mut context = get_context(accounts(2));
+        context.block_timestamp(999);
         testing_env!(context.build());
-
-        // Claim should panic
         let _ = contract.claim();
     }
 
     #[test]
     #[should_panic(expected = "Auction has already been claimed")]
-    fn claim_twice() {
-        let auctioneer: AccountId = "auctioneer.near".parse().unwrap();
-        let end_time: U64 = U64::from(1000);
-        let mut contract = Contract::init(end_time, auctioneer.clone());
-
-        // Set block_timestamp after auction end time
-        let mut context = get_context(auctioneer.clone());
-        context.block_timestamp(2000);
+    fn rejects_second_claim() {
+        let mut contract = new_contract();
+        let mut context = get_context(accounts(2));
+        context.block_timestamp(1001);
         testing_env!(context.build());
-
-        // First claim should succeed
         let _ = contract.claim();
-
-        // Second claim should panic
         let _ = contract.claim();
     }
 }

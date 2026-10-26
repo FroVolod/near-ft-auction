@@ -1178,18 +1178,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "42703706b716c37f96a77aea830392ad231f44c9e9a67872fa5548707e11b11c"
 
 [[package]]
-name = "ft_contract"
-version = "0.1.0"
-dependencies = [
- "cargo-near-build",
- "near-api",
- "near-sandbox",
- "near-sdk",
- "testresult",
- "tokio",
-]
-
-[[package]]
 name = "funty"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2072,6 +2060,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "near-contract-standards"
+version = "5.29.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "19050e45872e45cecb5a1b9d6e851f7776f4e4c9220a0caac0b8a21e3ca9f8a3"
+dependencies = [
+ "near-sdk",
+]
+
+[[package]]
 name = "near-crypto"
 version = "0.37.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2111,6 +2108,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ab6ae19c2dccd300fcd7f4a49f66bf980589487d5c8fdd1097e14a0ed4c2133"
 dependencies = [
  "near-primitives-core",
+]
+
+[[package]]
+name = "near-ft-auction"
+version = "0.1.0"
+dependencies = [
+ "cargo-near-build",
+ "near-api",
+ "near-contract-standards",
+ "near-sandbox",
+ "near-sdk",
+ "testresult",
+ "tokio",
 ]
 
 [[package]]

@@ -1,6 +1,6 @@
 [package]
-name = "ft_contract"
-description = "cargo-near-new-project-description"
+name = "near-ft-auction"
+description = "A simple smart contract for conducting auctions using fungible tokens on the NEAR Protocol network."
 version = "0.1.0"
 edition = "2024"
 resolver = "3"
@@ -8,7 +8,7 @@ rust-version = "1.93"
 # TODO: Fill out the repository field to help NEAR ecosystem tools to discover your project.
 # NEP-0330 is automatically implemented for all contracts built with https://github.com/near/cargo-near.
 # Link to the repository will be available via `contract_source_metadata` view-function.
-repository = "https://github.com/<xxx>/<xxx>"
+repository = "https://github.com/FroVolod/near-ft-auction.git"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -38,6 +38,7 @@ container_build_command = [
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [dependencies]
+near-contract-standards = "5.29"
 near-sdk = "5.29"
 
 [dev-dependencies]
