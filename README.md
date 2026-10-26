@@ -48,10 +48,10 @@ TWO_MINUTES_FROM_NOW=$(date -d '+2 minutes' +%s000000000)
 # on MacOS
 TWO_MINUTES_FROM_NOW=$(date -v+2M +%s000000000)
 
-near contract call-function as-transaction '<CONTRACT_ACCOUNT_ID>' init json-args '{"end_time": "'$TWO_MINUTES_FROM_NOW'", "auctioneer": "<AUCTIONEER_ACCOUNT_ID>", "token_contract": "usdn.testnet", "bid_step": "1000000000000000000"}' prepaid-gas '30.0 Tgas' attached-deposit '0 NEAR'
+near contract call-function as-transaction '<CONTRACT_ACCOUNT_ID>' init json-args '{"end_time": "'$TWO_MINUTES_FROM_NOW'", "auctioneer": "<AUCTIONEER_ACCOUNT_ID>", "token_contract": "usdn.testnet", "token_symbol": "USN", "token_decimals": 18, "bid_step": "1 USN"}' prepaid-gas '30.0 Tgas' attached-deposit '0 NEAR'
 ```
 
-`token_contract` is the NEP-141 token contract allowed to submit bids. `bid_step` is the minimum increment in the token's smallest units. The current `usdn.testnet` metadata reports 18 decimals, so the example sets the minimum increment to 1 USN.
+`token_contract` is the NEP-141 token contract allowed to submit bids. `token_symbol` and `token_decimals` must match that contract's `ft_metadata`; fetch them with `near_api::Tokens::ft_metadata` before initializing the auction. Provide `bid_step` as a human-readable decimal amount followed by the token symbol (for example, `"1 USN"`). The contract validates the symbol and converts the amount to the token's smallest units using `token_decimals`. The `get_highest_bid` and `get_bid_step` view methods return formatted values such as `10 USN`.
 
 The contract account and every bidder/auctioneer must be registered with the USN contract before they can receive USN. Send a bid using `ft_transfer_call` on `usdn.testnet` (not a NEAR deposit):
 

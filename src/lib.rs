@@ -5,12 +5,14 @@ use near_sdk::{
     require,
 };
 
+mod ft_properties;
+
 #[near(contract_state)]
 #[derive(PanicOnDefault)]
 pub struct Contract {
     highest_bid: StoredBid,
     token_contract: AccountId,
-    bid_step: u128,
+    bid_step: ft_properties::FungibleToken,
     auction_end_time: Timestamp,
     auctioneer: AccountId,
     is_claimed: bool,
@@ -20,14 +22,14 @@ pub struct Contract {
 #[derive(Clone)]
 struct StoredBid {
     bidder: AccountId,
-    bid: u128,
+    bid: ft_properties::FungibleToken,
 }
 
 #[near(serializers = [json])]
 #[derive(Clone)]
 pub struct Bid {
     pub bidder: AccountId,
-    pub bid: U128,
+    pub bid: ft_properties::FungibleToken,
 }
 
 #[near]
@@ -37,17 +39,23 @@ impl Contract {
         end_time: U64,
         auctioneer: AccountId,
         token_contract: AccountId,
-        bid_step: U128,
+        token_symbol: String,
+        token_decimals: u8,
+        bid_step: ft_properties::FungibleToken,
     ) -> Self {
-        require!(bid_step.0 > 0, "Bid step must be greater than zero");
+        require!(!token_symbol.is_empty(), "Token symbol cannot be empty");
+        let bid_step = bid_step
+            .normalize(token_decimals, &token_symbol)
+            .unwrap_or_else(|error| env::panic_str(&error));
+        require!(bid_step.amount() > 0, "Bid step must be greater than zero");
 
         Self {
             highest_bid: StoredBid {
                 bidder: env::current_account_id(),
-                bid: 0,
+                bid: bid_step.with_amount(0),
             },
             token_contract,
-            bid_step: bid_step.0,
+            bid_step,
             auction_end_time: end_time.into(),
             is_claimed: false,
             auctioneer,
@@ -66,14 +74,14 @@ impl Contract {
         transfer_tokens(
             self.token_contract.clone(),
             self.auctioneer.clone(),
-            U128(self.highest_bid.bid),
+            U128(self.highest_bid.bid.amount()),
         )
     }
 
     pub fn get_highest_bid(&self) -> Bid {
         Bid {
             bidder: self.highest_bid.bidder.clone(),
-            bid: U128(self.highest_bid.bid),
+            bid: self.highest_bid.bid.clone(),
         }
     }
 
@@ -89,8 +97,8 @@ impl Contract {
         self.token_contract.clone()
     }
 
-    pub fn get_bid_step(&self) -> U128 {
-        U128(self.bid_step)
+    pub fn get_bid_step(&self) -> ft_properties::FungibleToken {
+        self.bid_step.clone()
     }
 
     pub fn is_already_claimed(&self) -> bool {
@@ -119,12 +127,14 @@ impl FungibleTokenReceiver for Contract {
             bidder: last_bidder,
             bid: last_bid,
         } = self.highest_bid.clone();
+        let last_bid_amount = last_bid.amount();
+        let bid_step_amount = self.bid_step.amount();
         let is_current_bidder = sender_id == last_bidder;
         let minimum_payment = if is_current_bidder {
-            self.bid_step
+            bid_step_amount
         } else {
-            last_bid
-                .checked_add(self.bid_step)
+            last_bid_amount
+                .checked_add(bid_step_amount)
                 .expect("Minimum bid exceeds the maximum token amount")
         };
         require!(
@@ -133,7 +143,7 @@ impl FungibleTokenReceiver for Contract {
         );
 
         let new_bid = if is_current_bidder {
-            last_bid
+            last_bid_amount
                 .checked_add(amount.0)
                 .expect("Bid exceeds the maximum token amount")
         } else {
@@ -141,12 +151,16 @@ impl FungibleTokenReceiver for Contract {
         };
         self.highest_bid = StoredBid {
             bidder: sender_id,
-            bid: new_bid,
+            bid: self.bid_step.with_amount(new_bid),
         };
 
-        if !is_current_bidder && last_bid > 0 {
+        if !is_current_bidder && last_bid_amount > 0 {
             // This example does not recover the refund if the asynchronous token transfer fails.
-            let _ = transfer_tokens(self.token_contract.clone(), last_bidder, U128(last_bid));
+            let _ = transfer_tokens(
+                self.token_contract.clone(),
+                last_bidder,
+                U128(last_bid_amount),
+            );
         }
 
         PromiseOrValue::Value(U128(0))
@@ -188,7 +202,14 @@ mod tests {
 
     fn new_contract() -> Contract {
         testing_env!(get_context(accounts(1)).build());
-        Contract::init(U64::from(1000), accounts(2), token_contract(), U128(10))
+        Contract::init(
+            U64::from(1000),
+            accounts(2),
+            token_contract(),
+            "USN".to_string(),
+            18,
+            ft_properties::FungibleToken::from_params_ft(1, 0, "USN".to_string()),
+        )
     }
 
     fn receive_bid(contract: &mut Contract, bidder: AccountId, amount: u128) {
@@ -204,9 +225,9 @@ mod tests {
 
         let highest_bid = contract.get_highest_bid();
         assert_eq!(highest_bid.bidder, env::current_account_id());
-        assert_eq!(highest_bid.bid, U128(0));
+        assert_eq!(highest_bid.bid.to_string(), "0 USN");
         assert_eq!(contract.get_token_contract(), token_contract());
-        assert_eq!(contract.get_bid_step(), U128(10));
+        assert_eq!(contract.get_bid_step().to_string(), "1 USN");
     }
 
     #[test]
@@ -214,13 +235,13 @@ mod tests {
         let mut contract = new_contract();
         let alice = accounts(3);
 
-        receive_bid(&mut contract, alice.clone(), 20);
-        assert_eq!(contract.get_highest_bid().bid, U128(20));
+        receive_bid(&mut contract, alice.clone(), 20_000_000_000_000_000_000);
+        assert_eq!(contract.get_highest_bid().bid.to_string(), "20 USN");
 
-        receive_bid(&mut contract, alice.clone(), 10);
+        receive_bid(&mut contract, alice.clone(), 10_000_000_000_000_000_000);
         let highest_bid = contract.get_highest_bid();
         assert_eq!(highest_bid.bidder, alice);
-        assert_eq!(highest_bid.bid, U128(30));
+        assert_eq!(highest_bid.bid.to_string(), "30 USN");
     }
 
     #[test]
@@ -229,12 +250,12 @@ mod tests {
         let alice = accounts(3);
         let bob = accounts(4);
 
-        receive_bid(&mut contract, alice, 20);
-        receive_bid(&mut contract, bob.clone(), 30);
+        receive_bid(&mut contract, alice, 20_000_000_000_000_000_000);
+        receive_bid(&mut contract, bob.clone(), 30_000_000_000_000_000_000);
 
         let highest_bid = contract.get_highest_bid();
         assert_eq!(highest_bid.bidder, bob);
-        assert_eq!(highest_bid.bid, U128(30));
+        assert_eq!(highest_bid.bid.to_string(), "30 USN");
     }
 
     #[test]
@@ -249,8 +270,8 @@ mod tests {
     #[should_panic(expected = "Bid is below the minimum increment")]
     fn rejects_bid_below_minimum_increment() {
         let mut contract = new_contract();
-        receive_bid(&mut contract, accounts(3), 20);
-        receive_bid(&mut contract, accounts(4), 29);
+        receive_bid(&mut contract, accounts(3), 20_000_000_000_000_000_000);
+        receive_bid(&mut contract, accounts(4), 20_900_000_000_000_000_000);
     }
 
     #[test]
@@ -267,7 +288,7 @@ mod tests {
     fn claim_transfers_winning_amount_to_auctioneer() {
         let mut contract = new_contract();
         let alice = accounts(3);
-        receive_bid(&mut contract, alice, 20);
+        receive_bid(&mut contract, alice, 20_000_000_000_000_000_000);
 
         let mut context = get_context(accounts(2));
         context.block_timestamp(1001);
@@ -296,5 +317,18 @@ mod tests {
         testing_env!(context.build());
         let _ = contract.claim();
         let _ = contract.claim();
+    }
+
+    #[test]
+    fn formats_fractional_token_amounts() {
+        assert_eq!(
+            ft_properties::FungibleToken::from_params_ft(
+                123_450_000_000_000_000_000,
+                18,
+                "USN".to_string()
+            )
+            .to_string(),
+            "123.45 USN"
+        );
     }
 }

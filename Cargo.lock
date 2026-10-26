@@ -2119,6 +2119,7 @@ dependencies = [
  "near-contract-standards",
  "near-sandbox",
  "near-sdk",
+ "schemars 0.8.22",
  "testresult",
  "tokio",
 ]

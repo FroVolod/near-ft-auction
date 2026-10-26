@@ -41,6 +41,9 @@ container_build_command = [
 near-contract-standards = "5.29"
 near-sdk = "5.29"
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+schemars = "0.8"
+
 [dev-dependencies]
 near-sdk = { version = "5.29", features = ["unit-testing"] }
 near-sandbox = "0.3.12"

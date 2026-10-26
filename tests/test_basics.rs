@@ -1,4 +1,4 @@
-use near_api::{AccountId, NearToken};
+use near_api::{AccountId, NearToken, Tokens};
 use near_sdk::serde_json::json;
 
 #[derive(near_sdk::serde::Deserialize)]
@@ -18,6 +18,11 @@ async fn test_contract_on_sandbox(contract_wasm: Vec<u8>) -> testresult::TestRes
     let contract = create_subaccount(&sandbox, "contract.sandbox")
         .await?
         .as_contract();
+    let token_contract: AccountId = "usdn.testnet".parse().unwrap();
+    let metadata = Tokens::ft_metadata(token_contract.clone())
+        .fetch_from_testnet()
+        .await?
+        .data;
 
     let signer = near_api::Signer::from_secret_key(
         near_sandbox::config::DEFAULT_GENESIS_ACCOUNT_PRIVATE_KEY
@@ -36,8 +41,10 @@ async fn test_contract_on_sandbox(contract_wasm: Vec<u8>) -> testresult::TestRes
             json!({
                 "end_time": a_minute_from_now.to_string(),
                 "auctioneer": auctioneer.account_id(),
-                "token_contract": "usdn.testnet",
-                "bid_step": "100",
+                "token_contract": token_contract,
+                "token_symbol": metadata.symbol,
+                "token_decimals": metadata.decimals,
+                "bid_step": format!("1 {}", metadata.symbol),
             }),
         )?
         .with_signer(signer.clone())
@@ -52,7 +59,15 @@ async fn test_contract_on_sandbox(contract_wasm: Vec<u8>) -> testresult::TestRes
         .await?
         .data;
     assert_eq!(&highest_bid.bidder, contract.account_id());
-    assert_eq!(highest_bid.bid, "0");
+    assert_eq!(highest_bid.bid, format!("0 {}", metadata.symbol));
+
+    let bid_step: String = contract
+        .call_function("get_bid_step", ())
+        .read_only()
+        .fetch_from(&sandbox_network)
+        .await?
+        .data;
+    assert_eq!(bid_step, format!("1 {}", metadata.symbol));
 
     let configured_token: AccountId = contract
         .call_function("get_token_contract", ())
