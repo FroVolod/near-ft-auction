@@ -120,8 +120,9 @@ impl FungibleTokenReceiver for Contract {
         &mut self,
         sender_id: AccountId,
         amount: U128,
-        _msg: String,
+        msg: String,
     ) -> PromiseOrValue<U128> {
+        let _ = msg;
         require!(
             env::predecessor_account_id() == self.token_contract,
             "Only the configured token contract can submit bids"
