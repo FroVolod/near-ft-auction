@@ -1,10 +1,11 @@
 use near_contract_standards::fungible_token::receiver::FungibleTokenReceiver;
-use near_sdk::json_types::{U64, U128};
+use near_sdk::json_types::U128;
 use near_sdk::{
     AccountId, Gas, NearToken, PanicOnDefault, Promise, PromiseOrValue, Timestamp, env, near,
     require,
 };
 
+mod auction_time;
 mod ft_properties;
 
 #[near(contract_state)]
@@ -36,7 +37,7 @@ pub struct Bid {
 impl Contract {
     #[init]
     pub fn init(
-        end_time: U64,
+        auction_duration: String,
         auctioneer: AccountId,
         token_contract: AccountId,
         token_symbol: String,
@@ -44,6 +45,11 @@ impl Contract {
         bid_step: ft_properties::FungibleToken,
     ) -> Self {
         require!(!token_symbol.is_empty(), "Token symbol cannot be empty");
+        let duration = auction_time::parse_duration(&auction_duration)
+            .unwrap_or_else(|error| env::panic_str(&error));
+        let auction_end_time = env::block_timestamp()
+            .checked_add(duration)
+            .unwrap_or_else(|| env::panic_str("Auction end time exceeds the maximum timestamp"));
         let bid_step = bid_step
             .normalize(token_decimals, &token_symbol)
             .unwrap_or_else(|error| env::panic_str(&error));
@@ -56,7 +62,7 @@ impl Contract {
             },
             token_contract,
             bid_step,
-            auction_end_time: end_time.into(),
+            auction_end_time,
             is_claimed: false,
             auctioneer,
         }
@@ -85,8 +91,10 @@ impl Contract {
         }
     }
 
-    pub fn get_auction_end_time(&self) -> U64 {
-        self.auction_end_time.into()
+    pub fn get_auction_time_remaining(&self) -> String {
+        auction_time::format_time_remaining(
+            self.auction_end_time.saturating_sub(env::block_timestamp()),
+        )
     }
 
     pub fn get_auctioneer(&self) -> AccountId {
@@ -203,7 +211,7 @@ mod tests {
     fn new_contract() -> Contract {
         testing_env!(get_context(accounts(1)).build());
         Contract::init(
-            U64::from(1000),
+            "1 second".to_string(),
             accounts(2),
             token_contract(),
             "USN".to_string(),
@@ -214,7 +222,7 @@ mod tests {
 
     fn receive_bid(contract: &mut Contract, bidder: AccountId, amount: u128) {
         let mut context = get_context(token_contract());
-        context.block_timestamp(500);
+        context.block_timestamp(500_000_000);
         testing_env!(context.build());
         let _ = contract.ft_on_transfer(bidder, U128(amount), String::new());
     }
@@ -262,7 +270,11 @@ mod tests {
     #[should_panic(expected = "Only the configured token contract can submit bids")]
     fn rejects_bids_from_other_tokens() {
         let mut contract = new_contract();
-        testing_env!(get_context(accounts(5)).block_timestamp(500).build());
+        testing_env!(
+            get_context(accounts(5))
+                .block_timestamp(500_000_000)
+                .build()
+        );
         let _ = contract.ft_on_transfer(accounts(3), U128(20), String::new());
     }
 
@@ -279,7 +291,7 @@ mod tests {
     fn rejects_bids_after_auction_end() {
         let mut contract = new_contract();
         let mut context = get_context(token_contract());
-        context.block_timestamp(1000);
+        context.block_timestamp(1_000_000_000);
         testing_env!(context.build());
         let _ = contract.ft_on_transfer(accounts(3), U128(20), String::new());
     }
@@ -291,7 +303,7 @@ mod tests {
         receive_bid(&mut contract, alice, 20_000_000_000_000_000_000);
 
         let mut context = get_context(accounts(2));
-        context.block_timestamp(1001);
+        context.block_timestamp(1_001_000_000);
         testing_env!(context.build());
         let _ = contract.claim();
 
@@ -303,7 +315,7 @@ mod tests {
     fn rejects_claim_before_auction_end() {
         let mut contract = new_contract();
         let mut context = get_context(accounts(2));
-        context.block_timestamp(999);
+        context.block_timestamp(999_000_000);
         testing_env!(context.build());
         let _ = contract.claim();
     }
@@ -313,7 +325,7 @@ mod tests {
     fn rejects_second_claim() {
         let mut contract = new_contract();
         let mut context = get_context(accounts(2));
-        context.block_timestamp(1001);
+        context.block_timestamp(1_001_000_000);
         testing_env!(context.build());
         let _ = contract.claim();
         let _ = contract.claim();
@@ -330,5 +342,23 @@ mod tests {
             .to_string(),
             "123.45 USN"
         );
+    }
+
+    #[test]
+    fn init_sets_end_time_from_current_block_timestamp_and_duration() {
+        let mut context = get_context(accounts(1));
+        context.block_timestamp(5_000_000_000);
+        testing_env!(context.build());
+
+        let contract = Contract::init(
+            "24 hours".to_string(),
+            accounts(2),
+            token_contract(),
+            "USN".to_string(),
+            18,
+            ft_properties::FungibleToken::from_params_ft(1, 0, "USN".to_string()),
+        );
+
+        assert_eq!(contract.get_auction_time_remaining(), "1 day");
     }
 }

@@ -29,17 +29,12 @@ async fn test_contract_on_sandbox(contract_wasm: Vec<u8>) -> testresult::TestRes
             .parse()
             .unwrap(),
     )?;
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::SystemTime::UNIX_EPOCH)?
-        .as_secs();
-    let a_minute_from_now = (now + 60) * 1_000_000_000;
-
     near_api::Contract::deploy(contract.account_id().clone())
         .use_code(contract_wasm)
         .with_init_call(
             "init",
             json!({
-                "end_time": a_minute_from_now.to_string(),
+                "auction_duration": "24 hours",
                 "auctioneer": auctioneer.account_id(),
                 "token_contract": token_contract,
                 "token_symbol": metadata.symbol,
@@ -68,6 +63,19 @@ async fn test_contract_on_sandbox(contract_wasm: Vec<u8>) -> testresult::TestRes
         .await?
         .data;
     assert_eq!(bid_step, format!("1 {}", metadata.symbol));
+
+    let time_remaining: String = contract
+        .call_function("get_auction_time_remaining", ())
+        .read_only()
+        .fetch_from(&sandbox_network)
+        .await?
+        .data;
+    assert!(
+        time_remaining.contains("day")
+            || time_remaining.contains("hour")
+            || time_remaining.contains("minute"),
+        "Expected readable time remaining, got {time_remaining}"
+    );
 
     let configured_token: AccountId = contract
         .call_function("get_token_contract", ())
