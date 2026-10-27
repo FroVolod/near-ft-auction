@@ -40,6 +40,7 @@ async fn test_contract_on_sandbox(contract_wasm: Vec<u8>) -> testresult::TestRes
                 "token_symbol": metadata.symbol,
                 "token_decimals": metadata.decimals,
                 "bid_step": format!("1 {}", metadata.symbol),
+                "max_bid_step": format!("30 {}", metadata.symbol),
             }),
         )?
         .with_signer(signer.clone())
@@ -63,6 +64,14 @@ async fn test_contract_on_sandbox(contract_wasm: Vec<u8>) -> testresult::TestRes
         .await?
         .data;
     assert_eq!(bid_step, format!("1 {}", metadata.symbol));
+
+    let max_bid_step: String = contract
+        .call_function("get_max_bid_step", ())
+        .read_only()
+        .fetch_from(&sandbox_network)
+        .await?
+        .data;
+    assert_eq!(max_bid_step, format!("30 {}", metadata.symbol));
 
     let time_remaining: String = contract
         .call_function("get_auction_time_remaining", ())

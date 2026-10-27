@@ -14,6 +14,7 @@ pub struct Contract {
     highest_bid: StoredBid,
     token_contract: AccountId,
     bid_step: ft_properties::FungibleToken,
+    max_bid_step: ft_properties::FungibleToken,
     auction_end_time: Timestamp,
     auctioneer: AccountId,
     is_claimed: bool,
@@ -43,6 +44,7 @@ impl Contract {
         token_symbol: String,
         token_decimals: u8,
         bid_step: ft_properties::FungibleToken,
+        max_bid_step: ft_properties::FungibleToken,
     ) -> Self {
         require!(!token_symbol.is_empty(), "Token symbol cannot be empty");
         let duration = auction_time::parse_duration(&auction_duration)
@@ -54,6 +56,13 @@ impl Contract {
             .normalize(token_decimals, &token_symbol)
             .unwrap_or_else(|error| env::panic_str(&error));
         require!(bid_step.amount() > 0, "Bid step must be greater than zero");
+        let max_bid_step = max_bid_step
+            .normalize(token_decimals, &token_symbol)
+            .unwrap_or_else(|error| env::panic_str(&error));
+        require!(
+            max_bid_step.amount() >= bid_step.amount(),
+            "Maximum bid step must not be less than the minimum bid step"
+        );
 
         Self {
             highest_bid: StoredBid {
@@ -62,6 +71,7 @@ impl Contract {
             },
             token_contract,
             bid_step,
+            max_bid_step,
             auction_end_time,
             is_claimed: false,
             auctioneer,
@@ -109,6 +119,10 @@ impl Contract {
         self.bid_step.clone()
     }
 
+    pub fn get_max_bid_step(&self) -> ft_properties::FungibleToken {
+        self.max_bid_step.clone()
+    }
+
     pub fn is_already_claimed(&self) -> bool {
         self.is_claimed
     }
@@ -146,17 +160,26 @@ impl FungibleTokenReceiver for Contract {
                 .checked_add(bid_step_amount)
                 .expect("Minimum bid exceeds the maximum token amount")
         };
-        require!(
-            amount.0 >= minimum_payment,
-            "Bid is below the minimum increment"
-        );
+        if amount.0 < minimum_payment {
+            return PromiseOrValue::Value(amount);
+        }
+
+        let accepted_amount = if is_current_bidder {
+            amount.0.min(self.max_bid_step.amount())
+        } else {
+            let maximum_bid = last_bid_amount
+                .checked_add(self.max_bid_step.amount())
+                .expect("Maximum bid exceeds the maximum token amount");
+            amount.0.min(maximum_bid)
+        };
+        let refund_amount = amount.0 - accepted_amount;
 
         let new_bid = if is_current_bidder {
             last_bid_amount
-                .checked_add(amount.0)
+                .checked_add(accepted_amount)
                 .expect("Bid exceeds the maximum token amount")
         } else {
-            amount.0
+            accepted_amount
         };
         self.highest_bid = StoredBid {
             bidder: sender_id,
@@ -172,7 +195,7 @@ impl FungibleTokenReceiver for Contract {
             );
         }
 
-        PromiseOrValue::Value(U128(0))
+        PromiseOrValue::Value(U128(refund_amount))
     }
 }
 
@@ -218,14 +241,18 @@ mod tests {
             "USN".to_string(),
             18,
             ft_properties::FungibleToken::from_params_ft(1, 0, "USN".to_string()),
+            ft_properties::FungibleToken::from_params_ft(30, 0, "USN".to_string()),
         )
     }
 
-    fn receive_bid(contract: &mut Contract, bidder: AccountId, amount: u128) {
+    fn receive_bid(contract: &mut Contract, bidder: AccountId, amount: u128) -> u128 {
         let mut context = get_context(token_contract());
         context.block_timestamp(500_000_000);
         testing_env!(context.build());
-        let _ = contract.ft_on_transfer(bidder, U128(amount), String::new());
+        match contract.ft_on_transfer(bidder, U128(amount), String::new()) {
+            PromiseOrValue::Value(refund) => refund.0,
+            PromiseOrValue::Promise(_) => panic!("Expected an immediate FT refund amount"),
+        }
     }
 
     #[test]
@@ -237,6 +264,7 @@ mod tests {
         assert_eq!(highest_bid.bid.to_string(), "0 USN");
         assert_eq!(contract.get_token_contract(), token_contract());
         assert_eq!(contract.get_bid_step().to_string(), "1 USN");
+        assert_eq!(contract.get_max_bid_step().to_string(), "30 USN");
     }
 
     #[test]
@@ -244,10 +272,16 @@ mod tests {
         let mut contract = new_contract();
         let alice = accounts(3);
 
-        receive_bid(&mut contract, alice.clone(), 20_000_000_000_000_000_000);
+        assert_eq!(
+            receive_bid(&mut contract, alice.clone(), 20_000_000_000_000_000_000),
+            0
+        );
         assert_eq!(contract.get_highest_bid().bid.to_string(), "20 USN");
 
-        receive_bid(&mut contract, alice.clone(), 10_000_000_000_000_000_000);
+        assert_eq!(
+            receive_bid(&mut contract, alice.clone(), 10_000_000_000_000_000_000),
+            0
+        );
         let highest_bid = contract.get_highest_bid();
         assert_eq!(highest_bid.bidder, alice);
         assert_eq!(highest_bid.bid.to_string(), "30 USN");
@@ -259,8 +293,8 @@ mod tests {
         let alice = accounts(3);
         let bob = accounts(4);
 
-        receive_bid(&mut contract, alice, 20_000_000_000_000_000_000);
-        receive_bid(&mut contract, bob.clone(), 30_000_000_000_000_000_000);
+        let _ = receive_bid(&mut contract, alice, 20_000_000_000_000_000_000);
+        let _ = receive_bid(&mut contract, bob.clone(), 30_000_000_000_000_000_000);
 
         let highest_bid = contract.get_highest_bid();
         assert_eq!(highest_bid.bidder, bob);
@@ -280,11 +314,46 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Bid is below the minimum increment")]
-    fn rejects_bid_below_minimum_increment() {
+    fn refunds_bid_below_minimum_increment_without_changing_highest_bid() {
         let mut contract = new_contract();
-        receive_bid(&mut contract, accounts(3), 20_000_000_000_000_000_000);
-        receive_bid(&mut contract, accounts(4), 20_900_000_000_000_000_000);
+        let alice = accounts(3);
+        let bob = accounts(4);
+        let _ = receive_bid(&mut contract, alice.clone(), 20_000_000_000_000_000_000);
+
+        let refund = receive_bid(&mut contract, bob, 20_900_000_000_000_000_000);
+        assert_eq!(refund, 20_900_000_000_000_000_000);
+        let highest_bid = contract.get_highest_bid();
+        assert_eq!(highest_bid.bidder, alice);
+        assert_eq!(highest_bid.bid.to_string(), "20 USN");
+    }
+
+    #[test]
+    fn caps_highest_bid_and_refunds_payment_excess() {
+        let context = get_context(accounts(1));
+        testing_env!(context.build());
+        let mut contract = Contract::init(
+            "1 second".to_string(),
+            accounts(2),
+            token_contract(),
+            "USN".to_string(),
+            18,
+            ft_properties::FungibleToken::from_params_ft(3, 0, "USN".to_string()),
+            ft_properties::FungibleToken::from_params_ft(10, 0, "USN".to_string()),
+        );
+
+        let alice = accounts(3);
+        let bob = accounts(4);
+        let carol = accounts(5);
+        let usn = 1_000_000_000_000_000_000;
+
+        assert_eq!(receive_bid(&mut contract, alice, 5 * usn), 0);
+        assert_eq!(contract.get_highest_bid().bid.to_string(), "5 USN");
+
+        assert_eq!(receive_bid(&mut contract, bob, 7 * usn), 7 * usn);
+        assert_eq!(contract.get_highest_bid().bid.to_string(), "5 USN");
+
+        assert_eq!(receive_bid(&mut contract, carol, 25 * usn), 10 * usn);
+        assert_eq!(contract.get_highest_bid().bid.to_string(), "15 USN");
     }
 
     #[test]
@@ -301,7 +370,7 @@ mod tests {
     fn claim_transfers_winning_amount_to_auctioneer() {
         let mut contract = new_contract();
         let alice = accounts(3);
-        receive_bid(&mut contract, alice, 20_000_000_000_000_000_000);
+        let _ = receive_bid(&mut contract, alice, 20_000_000_000_000_000_000);
 
         let mut context = get_context(accounts(2));
         context.block_timestamp(1_001_000_000);
@@ -358,6 +427,7 @@ mod tests {
             "USN".to_string(),
             18,
             ft_properties::FungibleToken::from_params_ft(1, 0, "USN".to_string()),
+            ft_properties::FungibleToken::from_params_ft(30, 0, "USN".to_string()),
         );
 
         assert_eq!(contract.get_auction_time_remaining(), "1 day");
