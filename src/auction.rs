@@ -25,7 +25,8 @@ pub(super) fn start_new_auction(
 
     let duration = super::auction_time::parse_duration(&auction_duration)
         .unwrap_or_else(|error| env::panic_str(&error));
-    let auction_end_time = env::block_timestamp()
+    let auction_start_time = env::block_timestamp();
+    let auction_end_time = auction_start_time
         .checked_add(duration)
         .unwrap_or_else(|| env::panic_str("Auction end time exceeds the maximum timestamp"));
     let bid_step = bid_step
@@ -72,6 +73,7 @@ pub(super) fn start_new_auction(
         },
         bid_step,
         max_bid_step,
+        auction_start_time,
         auction_end_time,
         is_claimed: false,
     });

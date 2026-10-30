@@ -16,7 +16,8 @@ struct Auction {
     highest_bid: Bid,
     bid_step: String,
     max_bid_step: Option<String>,
-    auction_end_time: u64,
+    auction_start_time: String,
+    auction_end_time: String,
     time_remaining: String,
     is_claimed: bool,
 }
@@ -136,7 +137,11 @@ async fn test_contract_on_sandbox(contract_wasm: Vec<u8>) -> testresult::TestRes
     assert_eq!(auction.highest_bid.bid, format!("0 {}", metadata.symbol));
     assert_eq!(auction.bid_step, format!("1 {}", metadata.symbol));
     assert_eq!(auction.max_bid_step, None);
-    assert!(auction.auction_end_time > 0);
+    assert!(auction.auction_start_time.ends_with('Z'));
+    assert!(auction.auction_start_time.contains('T'));
+    assert!(auction.auction_end_time.ends_with('Z'));
+    assert!(auction.auction_end_time.contains('T'));
+    assert!(auction.auction_start_time < auction.auction_end_time);
     assert!(!auction.time_remaining.is_empty());
     assert!(!auction.is_claimed);
 

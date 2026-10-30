@@ -1,5 +1,48 @@
 use near_sdk::Timestamp;
 
+pub(super) fn format_timestamp_utc(timestamp: Timestamp) -> String {
+    const NANOS_PER_SECOND: u64 = 1_000_000_000;
+    const SECONDS_PER_DAY: u64 = 24 * 60 * 60;
+
+    let seconds = timestamp / NANOS_PER_SECOND;
+    let days = (seconds / SECONDS_PER_DAY) as i64;
+    let seconds_of_day = seconds % SECONDS_PER_DAY;
+    let (year, month, day) = civil_from_days(days);
+    let hour = seconds_of_day / 3_600;
+    let minute = seconds_of_day % 3_600 / 60;
+    let second = seconds_of_day % 60;
+    let nanoseconds = timestamp % NANOS_PER_SECOND;
+    let fraction = if nanoseconds == 0 {
+        String::new()
+    } else {
+        format!(".{:09}", nanoseconds)
+            .trim_end_matches('0')
+            .to_string()
+    };
+
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}{fraction}Z")
+}
+
+fn civil_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
+    let shifted_days = days_since_epoch + 719_468;
+    let era = if shifted_days >= 0 {
+        shifted_days
+    } else {
+        shifted_days - 146_096
+    } / 146_097;
+    let day_of_era = shifted_days - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    let year = year + i64::from(month <= 2);
+
+    (year, month, day)
+}
+
 pub(super) fn format_time_remaining(remaining_nanoseconds: Timestamp) -> String {
     const NANOS_PER_MINUTE: u64 = 60 * 1_000_000_000;
     const MINUTES_PER_DAY: u64 = 24 * 60;
@@ -95,5 +138,14 @@ mod tests {
         assert_eq!(format_time_remaining(60 * 60 * 1_000_000_000), "1 hour");
         assert_eq!(format_time_remaining(1_000_000_000), "1 minute");
         assert_eq!(format_time_remaining(0), "Auction ended");
+    }
+
+    #[test]
+    fn formats_timestamps_as_utc_iso_8601() {
+        assert_eq!(format_timestamp_utc(0), "1970-01-01T00:00:00Z");
+        assert_eq!(
+            format_timestamp_utc(1_793_433_257_560_811_807),
+            "2026-10-31T07:54:17.560811807Z"
+        );
     }
 }

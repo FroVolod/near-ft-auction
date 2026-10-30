@@ -60,7 +60,7 @@ near contract call-function as-transaction '<CONTRACT_ACCOUNT_ID>' start_new_auc
 
 `auction_duration` is a positive integer followed by seconds, minutes, hours, or days. The contract calculates the end time from the current block timestamp. Provide `bid_step` as a human-readable decimal amount with the token symbol. `max_bid_step` is optional; when provided, it caps the increase above the current highest bid and must be at least `bid_step`. When omitted, there is no maximum increase. A new bidder must submit at least the current highest bid plus `bid_step`; a lower payment is returned in full. For example, with a highest bid of `5 USN`, a `7 USN` payment is refunded in full when the bid step is `3 USN`, while a `25 USN` payment raises the highest bid to `15 USN` (the previous `5 USN` plus the `10 USN` maximum increase) and returns `10 USN` if `max_bid_step` is `"10 USN"`.
 
-Use the `get_auction_status` view method to fetch the active round in one response: lot description, auctioneer, highest bid, bid steps, end timestamp, readable time remaining, and claim status. It returns `null` before the first auction starts. The individual auction view methods remain available.
+Use the `get_auction_status` view method to fetch the active round in one response: lot description, auctioneer, highest bid, bid steps, UTC ISO 8601 start and end times, readable time remaining, and claim status. It returns `null` before the first auction starts. The individual auction view methods remain available.
 
 The contract account, bidders, auctioneers, and the owner (if withdrawing the FT commission) must be registered with the FT contract before they can receive tokens. Send bids using `ft_transfer_call` on the configured token contract, not as a NEAR deposit:
 

@@ -38,6 +38,7 @@ struct AuctionState {
     highest_bid: StoredBid,
     bid_step: ft_properties::FungibleToken,
     max_bid_step: Option<ft_properties::FungibleToken>,
+    auction_start_time: Timestamp,
     auction_end_time: Timestamp,
     is_claimed: bool,
 }
@@ -64,7 +65,8 @@ pub struct AuctionView {
     pub highest_bid: Bid,
     pub bid_step: ft_properties::FungibleToken,
     pub max_bid_step: Option<ft_properties::FungibleToken>,
-    pub auction_end_time: Timestamp,
+    pub auction_start_time: String,
+    pub auction_end_time: String,
     pub time_remaining: String,
     pub is_claimed: bool,
 }
@@ -278,7 +280,8 @@ impl Contract {
             },
             bid_step: auction.bid_step.clone(),
             max_bid_step: auction.max_bid_step.clone(),
-            auction_end_time: auction.auction_end_time,
+            auction_start_time: auction_time::format_timestamp_utc(auction.auction_start_time),
+            auction_end_time: auction_time::format_timestamp_utc(auction.auction_end_time),
             time_remaining: auction_time::format_time_remaining(
                 auction
                     .auction_end_time
