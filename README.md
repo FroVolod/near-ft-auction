@@ -42,19 +42,37 @@ cargo near deploy build-reproducible-wasm
 
 ## Initialize the contract
 
+`init` configures the FT and the contract's fees. The account that calls `init` becomes the contract owner and can withdraw accrued fees. Provide `auction_start_fee` as a human-readable NEAR amount, such as `"0.1 NEAR"`; the contract parses it into a `NearToken`. `claim_fee_basis_points` uses basis points (`200` means 2%).
+
 ```bash
-near contract call-function as-transaction '<CONTRACT_ACCOUNT_ID>' init json-args '{"auction_duration": "24 hours", "auctioneer": "<AUCTIONEER_ACCOUNT_ID>", "token_contract": "usdn.testnet", "token_symbol": "USN", "token_decimals": 18, "bid_step": "1 USN", "max_bid_step": "30 USN"}' prepaid-gas '30.0 Tgas' attached-deposit '0 NEAR'
+near contract call-function as-transaction '<CONTRACT_ACCOUNT_ID>' init json-args '{"token_contract": "usdn.testnet", "token_symbol": "USN", "token_decimals": 18, "auction_start_fee": "0.1 NEAR", "claim_fee_basis_points": 200}' prepaid-gas '30.0 Tgas' attached-deposit '0 NEAR'
 ```
 
-`auction_duration` is a positive integer followed by a unit: seconds, minutes, hours, or days (for example, `"24 hours"`). The contract calculates the end time from the current block timestamp when initialized. `get_auction_time_remaining` returns a readable countdown such as `2 days 22 minutes`, or `Auction ended` after the auction ends. `token_contract` is the NEP-141 token contract allowed to submit bids. `token_symbol` and `token_decimals` must match that contract's `ft_metadata`; fetch them with `near_api::Tokens::ft_metadata` before initializing the auction. Provide `bid_step` and `max_bid_step` as human-readable decimal amounts followed by the token symbol (for example, `"3 USN"` and `"10 USN"`). A new bidder must submit at least the current highest bid plus `bid_step`; a lower payment is returned in full. The maximum is the allowed increase above the current highest bid. Thus, with a highest bid of `5 USN`, a `7 USN` payment is refunded in full when the bid step is `3 USN`, while a `25 USN` payment raises the highest bid to `15 USN` (the previous `5 USN` plus the `10 USN` maximum increase) and returns `10 USN`. The contract validates the symbol and converts amounts to the token's smallest units using `token_decimals`. The `get_highest_bid`, `get_bid_step`, and `get_max_bid_step` view methods return formatted token amounts.
+The token metadata must match the configured NEP-141 contract's `ft_metadata`; clients can fetch it with `near_api::Tokens::ft_metadata`. No auction is active immediately after `init`.
 
-The contract account and every bidder/auctioneer must be registered with the USN contract before they can receive USN. Send a bid using `ft_transfer_call` on `usdn.testnet` (not a NEAR deposit):
+## Start an auction
+
+The caller of `start_new_auction` becomes the auctioneer. The call starts the first auction or, once the current auction has ended, claims its winning bid and starts the next round. The new auctioneer must attach exactly the configured `auction_start_fee`. The lot description is required and limited to 256 bytes.
+
+```bash
+near contract call-function as-transaction '<CONTRACT_ACCOUNT_ID>' start_new_auction json-args '{"auction_duration": "24 hours", "description": "A unique digital artwork", "bid_step": "1 USN"}' prepaid-gas '50.0 Tgas' attached-deposit '0.1 NEAR'
+```
+
+`auction_duration` is a positive integer followed by seconds, minutes, hours, or days. The contract calculates the end time from the current block timestamp. Provide `bid_step` as a human-readable decimal amount with the token symbol. `max_bid_step` is optional; when provided, it caps the increase above the current highest bid and must be at least `bid_step`. When omitted, there is no maximum increase. A new bidder must submit at least the current highest bid plus `bid_step`; a lower payment is returned in full. For example, with a highest bid of `5 USN`, a `7 USN` payment is refunded in full when the bid step is `3 USN`, while a `25 USN` payment raises the highest bid to `15 USN` (the previous `5 USN` plus the `10 USN` maximum increase) and returns `10 USN` if `max_bid_step` is `"10 USN"`.
+
+Use the `get_auction_status` view method to fetch the active round in one response: lot description, auctioneer, highest bid, bid steps, end timestamp, readable time remaining, and claim status. It returns `null` before the first auction starts. The individual auction view methods remain available.
+
+The contract account, bidders, auctioneers, and the owner (if withdrawing the FT commission) must be registered with the FT contract before they can receive tokens. Send bids using `ft_transfer_call` on the configured token contract, not as a NEAR deposit:
 
 ```bash
 near contract call-function as-transaction usdn.testnet ft_transfer_call json-args '{"receiver_id": "<CONTRACT_ACCOUNT_ID>", "amount": "<AMOUNT_IN_SMALLEST_USN_UNITS>", "msg": ""}' prepaid-gas '100.0 Tgas' attached-deposit '1 yoctoNEAR'
 ```
 
-The contract refunds the previous bidder and transfers the winning USN to the auctioneer when `claim` is called after the auction ends. Any unused amount returned by `ft_on_transfer` is refunded by the FT contract according to NEP-141 transfer-call resolution.
+After an auction ends, `claim` sends the auctioneer the winning bid less the configured commission. `start_new_auction` performs this claim automatically for the previous round. Start fees accrue in NEAR, and claim commissions accrue in the configured FT. Only the contract owner can withdraw them with `withdraw_start_fees` and `withdraw_claim_fees`.
+
+An auctioneer can query their completed-round statistics and history with `get_auctioneer_history(auctioneer_id, from_index, limit)`. The response includes the number of completed auctions, total winning bids, total paid out, the amount still pending, and a page of auction records with winning bidder/bid and payout status. Records are paginated in completion order; `limit` is capped at 50, and `next_index` indicates the next page. For example, start with `from_index: 0` and `limit: 20`, then use the returned `next_index`.
+
+If a token payout fails (for example, because its recipient is not registered), it remains listed by `get_pending_payouts` and in the auctioneer's history with `Pending` status. After resolving the cause, anyone can retry it with `retry_pending_payout(payout_id)`. Unused amounts from `ft_on_transfer` are returned by the FT contract according to NEP-141 transfer-call resolution.
 
 ## Useful Links
 
