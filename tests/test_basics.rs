@@ -206,6 +206,8 @@ async fn create_subaccount(
 }
 
 #[tokio::test]
+#[ignore = "requires fetching FT metadata from NEAR testnet"]
+// Run with: cargo test --locked --test test_basics -- --ignored --nocapture
 async fn test_contract_initializes_with_configured_token() -> testresult::TestResult<()> {
     let contract_wasm_path = cargo_near_build::build_with_cli(Default::default())?;
     let contract_wasm = std::fs::read(contract_wasm_path)?;
