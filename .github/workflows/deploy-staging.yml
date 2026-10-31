@@ -23,7 +23,7 @@ jobs:
         run: curl --proto '=https' --tlsv1.2 -LsSf https://github.com/near/near-cli-rs/releases/download/v0.20.0/near-cli-rs-installer.sh | sh
       - name: Create staging account
         run: |
-          near account create-account fund-myself "${{ env.NEAR_CONTRACT_PR_STAGING_ACCOUNT_ID }}" '1 NEAR' \
+          near account create-account fund-myself "${{ env.NEAR_CONTRACT_PR_STAGING_ACCOUNT_ID }}" '10 NEAR' \
             use-manually-provided-public-key "${{ vars.NEAR_CONTRACT_STAGING_ACCOUNT_PUBLIC_KEY }}" \
             sign-as "${{ vars.NEAR_CONTRACT_STAGING_ACCOUNT_ID }}" \
             network-config "${{ vars.NEAR_CONTRACT_STAGING_NETWORK }}" \
