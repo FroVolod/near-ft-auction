@@ -1,19 +1,22 @@
 name: Deploy to staging
 on:
   pull_request:
+  push:
+    branches: [main]
 
 jobs:
   test:
     uses: ./.github/workflows/test.yml
 
   deploy-staging:
-    name: Deploy to staging subaccount
+    name: Deploy to staging
     permissions:
+      contents: read
       pull-requests: write
     needs: [test]
     runs-on: ubuntu-latest
     env:
-      NEAR_CONTRACT_PR_STAGING_ACCOUNT_ID: gh-${{ github.event.number }}.${{ vars.NEAR_CONTRACT_STAGING_ACCOUNT_ID }}
+      NEAR_CONTRACT_STAGING_ACCOUNT_ID: ${{ github.event_name == 'pull_request' && format('gh-{0}.{1}', github.event.number, vars.NEAR_CONTRACT_STAGING_ACCOUNT_ID) || format('gh-main-{0}-{1}.{2}', github.run_number, github.run_attempt, vars.NEAR_CONTRACT_STAGING_ACCOUNT_ID) }}
 
     steps:
       - name: Checkout repository
@@ -22,9 +25,10 @@ jobs:
       - name: Install near CLI
         run: curl --proto '=https' --tlsv1.2 -LsSf https://github.com/near/near-cli-rs/releases/download/v0.20.0/near-cli-rs-installer.sh | sh
       - name: Create staging account
-        if: github.event.action == 'opened' || github.event.action == 'reopened'
+        id: create-staging-account
+        if: (github.event_name == 'pull_request' && (github.event.action == 'opened' || github.event.action == 'reopened')) || github.event_name == 'push'
         run: |
-          near account create-account fund-myself "${{ env.NEAR_CONTRACT_PR_STAGING_ACCOUNT_ID }}" '10 NEAR' \
+          near account create-account fund-myself "${{ env.NEAR_CONTRACT_STAGING_ACCOUNT_ID }}" '10 NEAR' \
             use-manually-provided-public-key "${{ vars.NEAR_CONTRACT_STAGING_ACCOUNT_PUBLIC_KEY }}" \
             sign-as "${{ vars.NEAR_CONTRACT_STAGING_ACCOUNT_ID }}" \
             network-config "${{ vars.NEAR_CONTRACT_STAGING_NETWORK }}" \
@@ -34,19 +38,30 @@ jobs:
       - name: Install cargo-near CLI
         run: curl --proto '=https' --tlsv1.2 -LsSf https://github.com/near/cargo-near/releases/download/cargo-near-v0.23.0-rc.2/cargo-near-installer.sh | sh
       - name: Deploy to staging
-        # `--skip-git-remote-check` was used
-        # as pull request git refs `refs/pull/NUMBER/merge` are somewhat harder to access and live only as long as PRs do
-        # 
-        # WASM reproducibility check akin to SourceScan won't be available for staging contracts, deployed from PRs 
+        # Pull request merge refs are temporary and unavailable for remote reproducibility checks.
         run: |
-          cargo near deploy build-reproducible-wasm --skip-git-remote-check "${{ env.NEAR_CONTRACT_PR_STAGING_ACCOUNT_ID }}" \
+          reproducibility_args=()
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            reproducibility_args+=(--skip-git-remote-check)
+          fi
+          cargo near deploy build-reproducible-wasm "${reproducibility_args[@]}" "${{ env.NEAR_CONTRACT_STAGING_ACCOUNT_ID }}" \
             without-init-call \
             network-config "${{ vars.NEAR_CONTRACT_STAGING_NETWORK }}" \
             sign-with-plaintext-private-key "${{ secrets.NEAR_CONTRACT_STAGING_ACCOUNT_PRIVATE_KEY }}" \
             send
 
+      - name: Remove main staging account
+        if: always() && github.event_name == 'push' && steps.create-staging-account.outcome == 'success'
+        run: |
+          near account delete-account "${{ env.NEAR_CONTRACT_STAGING_ACCOUNT_ID }}" \
+            beneficiary "${{ vars.NEAR_CONTRACT_STAGING_ACCOUNT_ID }}" \
+            network-config "${{ vars.NEAR_CONTRACT_STAGING_NETWORK }}" \
+            sign-with-plaintext-private-key "${{ secrets.NEAR_CONTRACT_STAGING_ACCOUNT_PRIVATE_KEY }}" \
+            send
+
       - name: Comment on pull request
+        if: github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh pr comment "${{ github.event.number }}" --body "Staging contract is deployed to ["'`'"${{ env.NEAR_CONTRACT_PR_STAGING_ACCOUNT_ID }}"'`'" account](https://explorer.${{ vars.NEAR_CONTRACT_STAGING_NETWORK }}.near.org/accounts/${{ env.NEAR_CONTRACT_PR_STAGING_ACCOUNT_ID }})"
+          gh pr comment "${{ github.event.number }}" --body "Staging contract is deployed to ["'`'"${{ env.NEAR_CONTRACT_STAGING_ACCOUNT_ID }}"'`'" account](https://explorer.${{ vars.NEAR_CONTRACT_STAGING_NETWORK }}.near.org/accounts/${{ env.NEAR_CONTRACT_STAGING_ACCOUNT_ID }})"
