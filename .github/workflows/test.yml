@@ -9,7 +9,7 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-      - run: cargo fmt --check
+      - run: cargo fmt --all -- --check
 
   code-linter:
     name: Code Linter
@@ -31,4 +31,4 @@ jobs:
       - name: Install cargo-near CLI
         run: curl --proto '=https' --tlsv1.2 -LsSf https://github.com/near/cargo-near/releases/download/cargo-near-v0.23.0-rc.2/cargo-near-installer.sh | sh
       - name: Run cargo test
-        run: cargo test
+        run: cargo test --locked --all-features -- --nocapture
