@@ -1,3 +1,8 @@
+//! NEP-141 auction contract for NEAR.
+//!
+//! Supports auction creation, FT bids, claims, and auctioneer payout history.
+//! See the project README for initialization and usage instructions.
+
 use near_contract_standards::fungible_token::receiver::FungibleTokenReceiver;
 use near_sdk::json_types::U128;
 use near_sdk::store::LookupMap;
@@ -10,6 +15,7 @@ mod auction;
 mod auction_time;
 mod ft_properties;
 
+/// Stores the auction configuration, active round, fees, and payout history.
 #[near(contract_state)]
 #[derive(PanicOnDefault)]
 pub struct Contract {
@@ -50,6 +56,7 @@ struct StoredBid {
     bid: ft_properties::FungibleToken,
 }
 
+/// Identifies a bidder and the human-readable amount of their bid.
 #[near(serializers = [borsh, json])]
 #[derive(Clone)]
 pub struct Bid {
@@ -57,6 +64,7 @@ pub struct Bid {
     pub bid: ft_properties::FungibleToken,
 }
 
+/// Presents the active auction with formatted timestamps and bid amounts.
 #[near(serializers = [json])]
 pub struct AuctionView {
     pub id: u64,
@@ -71,6 +79,7 @@ pub struct AuctionView {
     pub is_claimed: bool,
 }
 
+/// Tracks an auctioneer payment that is in progress or may need retrying.
 #[near(serializers = [borsh, json])]
 #[derive(Clone)]
 pub struct PendingPayout {
@@ -82,6 +91,7 @@ pub struct PendingPayout {
     pub in_flight: bool,
 }
 
+/// Describes the transfer state of an auctioneer's payout.
 #[near(serializers = [borsh, json])]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PayoutStatus {
@@ -91,6 +101,7 @@ pub enum PayoutStatus {
     Paid,
 }
 
+/// Summarizes a completed auction and its payout for an auctioneer.
 #[near(serializers = [borsh, json])]
 #[derive(Clone)]
 pub struct AuctioneerAuction {
@@ -112,6 +123,7 @@ struct AuctioneerTotals {
     pending_payout_amount: u128,
 }
 
+/// Contains an auctioneer's aggregate totals and a page of completed auctions.
 #[near(serializers = [json])]
 pub struct AuctioneerHistory {
     pub auction_count: u64,
